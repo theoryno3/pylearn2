@@ -4,7 +4,10 @@ Functionality for training with dropout.
 __authors__ = 'Ian Goodfellow'
 __copyright__ = "Copyright 2013, Universite de Montreal"
 
+from functools import wraps
+
 from pylearn2.costs.cost import DefaultDataSpecsMixin, Cost
+
 
 class Dropout(DefaultDataSpecsMixin, Cost):
     """
@@ -58,7 +61,7 @@ class Dropout(DefaultDataSpecsMixin, Cost):
     supervised = True
 
     def __init__(self, default_input_include_prob=.5, input_include_probs=None,
-            default_input_scale=2., input_scales=None, per_example=True):
+                 default_input_scale=2., input_scales=None, per_example=True):
 
         if input_include_probs is None:
             input_include_probs = {}
@@ -69,12 +72,9 @@ class Dropout(DefaultDataSpecsMixin, Cost):
         self.__dict__.update(locals())
         del self.self
 
+    @wraps(Cost.expr)
     def expr(self, model, data, ** kwargs):
-        """
-        .. todo::
 
-            WRITEME
-        """
         space, sources = self.get_data_specs(model)
         space.validate(data)
         (X, Y) = data
@@ -87,3 +87,22 @@ class Dropout(DefaultDataSpecsMixin, Cost):
             per_example=self.per_example
         )
         return model.cost(Y, Y_hat)
+
+    @wraps(Cost.cost_per_example)
+    def cost_per_example(self, model, data, ** kwargs):
+        space, sources = self.get_data_specs(model)
+        space.validate(data)
+        (X, Y) = data
+        Y_hat = model.dropout_fprop(
+            X,
+            default_input_include_prob=self.default_input_include_prob,
+            input_include_probs=self.input_include_probs,
+            default_input_scale=self.default_input_scale,
+            input_scales=self.input_scales,
+            per_example=self.per_example
+        )
+        return model.cost_matrix(Y, Y_hat).sum(axis=1)
+
+    @wraps(Cost.is_stochastic)
+    def is_stochastic(self):
+        return True

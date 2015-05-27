@@ -13,26 +13,31 @@ __email__ = "pylearn-dev@googlegroups"
 
 import logging
 import warnings
-import numpy as np
 
+import numpy as np
+from theano.compat import six
 from theano import config
 from theano import function
-from theano.compat.python2x import OrderedDict
 from theano.gof.op import get_debug_values
 
+from pylearn2.compat import OrderedDict, first_key
 from pylearn2.monitor import Monitor
 from pylearn2.space import CompositeSpace, NullSpace
 from pylearn2.train_extensions import TrainExtension
 from pylearn2.training_algorithms.training_algorithm import TrainingAlgorithm
 from pylearn2.training_algorithms.learning_rule import Momentum
-from pylearn2.training_algorithms.learning_rule import MomentumAdjustor \
-        as LRMomentumAdjustor
+from pylearn2.training_algorithms.learning_rule import (
+    MomentumAdjustor as LRMomentumAdjustor)
 from pylearn2.utils.iteration import is_stochastic, has_uniform_batch_size
 from pylearn2.utils import py_integer_types, py_float_types
 from pylearn2.utils import safe_zip
 from pylearn2.utils import serial
 from pylearn2.utils import sharedX
+from pylearn2.utils import contains_nan
+from pylearn2.utils import contains_inf
+from pylearn2.utils import isfinite
 from pylearn2.utils.data_specs import DataSpecsMapping
+from pylearn2.utils.exc import reraise_as
 from pylearn2.utils.timing import log_timing
 from pylearn2.utils.rng import make_np_rng
 
@@ -43,11 +48,11 @@ log = logging.getLogger(__name__)
 class SGD(TrainingAlgorithm):
     """
     SGD = (Minibatch) Stochastic Gradient Descent.
-    A TrainingAlgorithm that does stochastic gradient descent on minibatches
-    of training examples.
+    A TrainingAlgorithm that does stochastic gradient descent on
+    minibatches of training examples.
 
-    For theoretical background on this algorithm, see Yoshua Bengio's machine
-    learning course notes on the subject:
+    For theoretical background on this algorithm, see Yoshua Bengio's
+    machine learning course notes on the subject:
 
     http://www.iro.umontreal.ca/~pift6266/H10/notes/gradient.html
 
@@ -114,15 +119,6 @@ class SGD(TrainingAlgorithm):
 
         This argument allows more sophisticated learning rules, such
         as SGD with momentum.
-    init_momentum : float, **DEPRECATED** option
-        Use learning_rule instead.
-        If None, does not use momentum otherwise, use momentum and
-        initialize the momentum coefficient to init_momentum. Callbacks
-        can change this over time just like the learning rate. If the
-        gradient is the same on every step, then the update taken by the
-        SGD algorithm is scaled by a factor of 1/(1-momentum). See
-        section 9 of Geoffrey Hinton's "A Practical Guide to Training
-        Restricted Boltzmann Machines" for details.
     set_batch_size : bool, optional
         Defaults to False.
         If True, and batch_size conflicts with model.force_batch_size,
@@ -145,8 +141,9 @@ class SGD(TrainingAlgorithm):
         things like check for NaNs at every step, or record md5 digests
         of all computations performed by the update function to help
         isolate problems with nondeterminism.
-    monitoring_costs : list, optional
-        a list of Cost instances. The Monitor will also include all
+    monitoring_costs : OrderedDict, optional
+        A dictionary of Cost instances. Keys should be string containing
+        the name of the cost. The Monitor will also include all
         channels defined by these Costs, even though we don't train
         using them.
     seed : valid argument to np.random.RandomState, optional
@@ -155,12 +152,12 @@ class SGD(TrainingAlgorithm):
     """
     def __init__(self, learning_rate, cost=None, batch_size=None,
                  monitoring_batch_size=None, monitoring_batches=None,
-                 monitoring_dataset=None, monitor_iteration_mode='sequential',
+                 monitoring_dataset=None,
+                 monitor_iteration_mode='sequential',
                  termination_criterion=None, update_callbacks=None,
-                 learning_rule = None, init_momentum = None,
-                 set_batch_size = False,
-                 train_iteration_mode = None, batches_per_iter=None,
-                 theano_function_mode = None, monitoring_costs=None,
+                 learning_rule=None, set_batch_size=False,
+                 train_iteration_mode=None, batches_per_iter=None,
+                 theano_function_mode=None, monitoring_costs=None,
                  seed=[2012, 10, 5]):
 
         if isinstance(cost, (list, tuple, set)):
@@ -168,15 +165,7 @@ class SGD(TrainingAlgorithm):
                             "Costs to represent a sum of Costs. Use " +
                             "pylearn2.costs.cost.SumOfCosts instead.")
 
-        if init_momentum:
-            warnings.warn("init_momentum interface is deprecated and will "
-            "become officially unsuported as of May 9, 2014. Please use the "
-            "`learning_rule` parameter instead, providing an object of type "
-            "`pylearn2.training_algorithms.learning_rule.Momentum` instead")
-            # Convert to new interface under the hood.
-            self.learning_rule = Momentum(init_momentum)
-        else:
-            self.learning_rule = learning_rule
+        self.learning_rule = learning_rule
 
         self.learning_rate = sharedX(learning_rate, 'learning_rate')
         self.cost = cost
@@ -200,9 +189,44 @@ class SGD(TrainingAlgorithm):
             train_iteration_mode = 'shuffled_sequential'
         self.train_iteration_mode = train_iteration_mode
         self.first = True
-        self.rng = make_np_rng(seed, which_method=["randn","randint"])
+        self.rng = make_np_rng(seed, which_method=["randn", "randint"])
         self.theano_function_mode = theano_function_mode
         self.monitoring_costs = monitoring_costs
+
+    def _setup_monitor(self):
+        """
+        Set up monitor to model the objective value, learning rate,
+        momentum (if applicable), and extra channels defined by
+        the cost.
+
+        This method must be called after `learning_rule.get_updates`,
+        since it may have an effect on `learning_rule.add_channels_to_monitor`
+        (that is currently the case for `learning_rule.RMSProp`).
+        """
+        if bool(self.monitoring_dataset):
+            if (self.monitoring_batch_size is None and
+                    self.monitoring_batches is None):
+                self.monitoring_batch_size = self.batch_size
+                self.monitoring_batches = self.batches_per_iter
+            self.monitor.setup(dataset=self.monitoring_dataset,
+                               cost=self.cost,
+                               batch_size=self.monitoring_batch_size,
+                               num_batches=self.monitoring_batches,
+                               extra_costs=self.monitoring_costs,
+                               mode=self.monitor_iteration_mode)
+            dataset_name = first_key(self.monitoring_dataset)
+            monitoring_dataset = self.monitoring_dataset[dataset_name]
+            # TODO: have Monitor support non-data-dependent channels
+            self.monitor.add_channel(name='learning_rate',
+                                     ipt=None,
+                                     val=self.learning_rate,
+                                     data_specs=(NullSpace(), ''),
+                                     dataset=monitoring_dataset)
+
+            if self.learning_rule:
+                self.learning_rule.add_channels_to_monitor(
+                    self.monitor,
+                    monitoring_dataset)
 
     def setup(self, model, dataset):
         """
@@ -217,13 +241,13 @@ class SGD(TrainingAlgorithm):
             self.cost = model.get_default_cost()
 
         inf_params = [param for param in model.get_params()
-                      if np.any(np.isinf(param.get_value()))]
+                      if contains_inf(param.get_value())]
         if len(inf_params) > 0:
             raise ValueError("These params are Inf: "+str(inf_params))
-        if any([np.any(np.isnan(param.get_value()))
+        if any([contains_nan(param.get_value())
                 for param in model.get_params()]):
             nan_params = [param for param in model.get_params()
-                          if np.any(np.isnan(param.get_value()))]
+                          if contains_nan(param.get_value())]
             raise ValueError("These params are NaN: "+str(nan_params))
         self.model = model
 
@@ -237,9 +261,7 @@ class SGD(TrainingAlgorithm):
         train_dataset_is_uneven = \
             dataset.get_num_examples() % self.batch_size != 0
 
-        has_monitoring_datasets = \
-            self.monitoring_dataset is not None and \
-            self.monitoring_dataset.values() > 0
+        has_monitoring_datasets = bool(self.monitoring_dataset)
 
         if has_monitoring_datasets:
             monitoring_datasets_are_uneven = \
@@ -297,35 +319,7 @@ class SGD(TrainingAlgorithm):
             # Concatenate the name of all tensors in theano_args !?
             cost_value.name = 'objective'
 
-        # Set up monitor to model the objective value, learning rate,
-        # momentum (if applicable), and extra channels defined by
-        # the cost
         learning_rate = self.learning_rate
-        if self.monitoring_dataset is not None:
-            if (self.monitoring_batch_size is None and
-                    self.monitoring_batches is None):
-                self.monitoring_batch_size = self.batch_size
-                self.monitoring_batches = self.batches_per_iter
-            self.monitor.setup(dataset=self.monitoring_dataset,
-                               cost=self.cost,
-                               batch_size=self.monitoring_batch_size,
-                               num_batches=self.monitoring_batches,
-                               extra_costs=self.monitoring_costs,
-                               mode=self.monitor_iteration_mode)
-            dataset_name = self.monitoring_dataset.keys()[0]
-            monitoring_dataset = self.monitoring_dataset[dataset_name]
-            #TODO: have Monitor support non-data-dependent channels
-            self.monitor.add_channel(name='learning_rate',
-                                     ipt=None,
-                                     val=learning_rate,
-                                     data_specs=(NullSpace(), ''),
-                                     dataset=monitoring_dataset)
-
-            if self.learning_rule:
-                self.learning_rule.add_channels_to_monitor(
-                        self.monitor,
-                        monitoring_dataset)
-
         params = list(model.get_params())
         assert len(params) > 0
         for i, param in enumerate(params):
@@ -355,15 +349,16 @@ class SGD(TrainingAlgorithm):
 
         for key in lr_scalers:
             if key not in params:
-                raise ValueError("Tried to scale the learning rate on " +\
-                        str(key)+" which is not an optimization parameter.")
+                raise ValueError(
+                    "Tried to scale the learning rate on " +
+                    str(key) + " which is not an optimization parameter.")
 
         log.info('Parameter and initial learning rate summary:')
         for param in params:
             param_name = param.name
             if param_name is None:
                 param_name = 'anon_param'
-            lr = learning_rate.get_value() * lr_scalers.get(param,1.)
+            lr = learning_rate.get_value() * lr_scalers.get(param, 1.)
             log.info('\t' + param_name + ': ' + str(lr))
 
         if self.learning_rule:
@@ -371,9 +366,9 @@ class SGD(TrainingAlgorithm):
                 learning_rate, grads, lr_scalers))
         else:
             # Use standard SGD updates with fixed learning rate.
-            updates.update( dict(safe_zip(params, [param - learning_rate * \
-                lr_scalers.get(param, 1.) * grads[param]
-                                    for param in params])))
+            updates.update(dict(safe_zip(params, [param - learning_rate *
+                           lr_scalers.get(param, 1.) * grads[param]
+                           for param in params])))
 
         for param in params:
             if updates[param].name is None:
@@ -384,13 +379,21 @@ class SGD(TrainingAlgorithm):
             if update.name is None:
                 update.name = 'censor(sgd_update(' + param.name + '))'
             for update_val in get_debug_values(update):
-                if np.any(np.isinf(update_val)):
+                if contains_inf(update_val):
                     raise ValueError("debug value of %s contains infs" %
-                            update.name)
-                if np.any(np.isnan(update_val)):
+                                     update.name)
+                if contains_nan(update_val):
                     raise ValueError("debug value of %s contains nans" %
-                            update.name)
+                                     update.name)
 
+        # Set up monitor to model the objective value, learning rate,
+        # momentum (if applicable), and extra channels defined by
+        # the cost.
+        # We have to do that after learning_rule.get_updates has been
+        # called, since it may have an effect on
+        # learning_rule.add_channels_to_monitor (that is currently the case
+        # for AdaDelta and RMSProp).
+        self._setup_monitor()
 
         with log_timing(log, 'Compiling sgd_update'):
             self.sgd_update = function(theano_args,
@@ -414,8 +417,8 @@ class SGD(TrainingAlgorithm):
         # Make sure none of the parameters have bad values
         for param in self.params:
             value = param.get_value(borrow=True)
-            if np.any(np.isnan(value)) or np.any(np.isinf(value)):
-                raise Exception("NaN in " + param.name)
+            if not isfinite(value):
+                raise RuntimeError("NaN in " + param.name)
 
         self.first = False
         rng = self.rng
@@ -433,15 +436,17 @@ class SGD(TrainingAlgorithm):
             # No data will be returned by the iterator, and it is impossible
             # to know the size of the actual batch.
             # It is not decided yet what the right thing to do should be.
-            raise NotImplementedError("Unable to train with SGD, because "
-                    "the cost does not actually use data from the data set. "
-                    "data_specs: %s" % str(data_specs))
+            raise NotImplementedError(
+                "Unable to train with SGD, because "
+                "the cost does not actually use data from the data set. "
+                "data_specs: %s" % str(data_specs))
         flat_data_specs = (CompositeSpace(space_tuple), source_tuple)
 
         iterator = dataset.iterator(mode=self.train_iteration_mode,
-                batch_size=self.batch_size,
-                data_specs=flat_data_specs, return_tuple=True,
-                rng = rng, num_batches = self.batches_per_iter)
+                                    batch_size=self.batch_size,
+                                    data_specs=flat_data_specs,
+                                    return_tuple=True, rng=rng,
+                                    num_batches=self.batches_per_iter)
 
         on_load_batch = self.on_load_batch
         for batch in iterator:
@@ -461,8 +466,8 @@ class SGD(TrainingAlgorithm):
         # Make sure none of the parameters have bad values
         for param in self.params:
             value = param.get_value(borrow=True)
-            if np.any(np.isnan(value)) or np.any(np.isinf(value)):
-                raise Exception("NaN in " + param.name)
+            if not isfinite(value):
+                raise RuntimeError("NaN in " + param.name)
 
     def continue_learning(self, model):
         """
@@ -478,6 +483,7 @@ class SGD(TrainingAlgorithm):
             return True
         else:
             return self.termination_criterion.continue_learning(self.model)
+
 
 class MonitorBasedLRAdjuster(TrainExtension):
     """
@@ -523,7 +529,7 @@ class MonitorBasedLRAdjuster(TrainExtension):
 
     def __init__(self, high_trigger=1., shrink_amt=.99,
                  low_trigger=.99, grow_amt=1.01,
-                 min_lr = 1e-7, max_lr = 1.,
+                 min_lr=1e-7, max_lr=1.,
                  dataset_name=None, channel_name=None):
         self.high_trigger = high_trigger
         self.shrink_amt = shrink_amt
@@ -555,32 +561,33 @@ class MonitorBasedLRAdjuster(TrainExtension):
         lr = algorithm.learning_rate
         current_learning_rate = lr.get_value()
         assert hasattr(model, 'monitor'), ("no monitor associated with "
-                + str(model))
+                                           + str(model))
         monitor = model.monitor
         monitor_channel_specified = True
 
         if self.channel_name is None:
             monitor_channel_specified = False
             channels = [elem for elem in monitor.channels
-                    if elem.endswith("objective")]
+                        if elem.endswith("objective")]
             if len(channels) < 1:
-                raise ValueError("There are no monitoring channels that end "
-                        "with \"objective\". Please specify either "
-                        "channel_name or dataset_name.")
+                raise ValueError(
+                    "There are no monitoring channels that end "
+                    "with \"objective\". Please specify either "
+                    "channel_name or dataset_name.")
             elif len(channels) > 1:
                 datasets = algorithm.monitoring_dataset.keys()
-                raise ValueError("There are multiple monitoring channels that"
-                        "end with \"_objective\". The list of available "
-                        "datasets are: " +
-                                str(datasets) + " . Please specify either "
-                                "channel_name or dataset_name in the "
-                                "MonitorBasedLRAdjuster constructor to "
-                                'disambiguate.')
+                raise ValueError(
+                    "There are multiple monitoring channels that"
+                    "end with \"_objective\". The list of available "
+                    "datasets are: " +
+                    str(datasets) + " . Please specify either "
+                    "channel_name or dataset_name in the "
+                    "MonitorBasedLRAdjuster constructor to "
+                    'disambiguate.')
             else:
                 self.channel_name = channels[0]
                 warnings.warn('The channel that has been chosen for '
-                        'monitoring is: ' +
-                              str(self.channel_name) + '.')
+                              'monitoring is: ' + str(self.channel_name) + '.')
 
         try:
             v = monitor.channels[self.channel_name].val_record
@@ -589,38 +596,41 @@ class MonitorBasedLRAdjuster(TrainExtension):
             if monitor_channel_specified:
                 if self.dataset_name:
                     err_input = 'The dataset_name \'' + str(
-                            self.dataset_name) + '\' is not valid.'
+                        self.dataset_name) + '\' is not valid.'
                 else:
                     err_input = 'The channel_name \'' + str(
-                            self.channel_name) + '\' is not valid.'
+                        self.channel_name) + '\' is not valid.'
             err_message = 'There is no monitoring channel named \'' + \
-                    str(self.channel_name) + '\'. You probably need to ' + \
-                    'specify a valid monitoring channel by using either ' + \
-                    'dataset_name or channel_name in the ' + \
-                    'MonitorBasedLRAdjuster constructor. ' + err_input
-            raise ValueError(err_message)
+                str(self.channel_name) + '\'. You probably need to ' + \
+                'specify a valid monitoring channel by using either ' + \
+                'dataset_name or channel_name in the ' + \
+                'MonitorBasedLRAdjuster constructor. ' + err_input
+            reraise_as(ValueError(err_message))
 
         if len(v) < 1:
             if monitor.dataset is None:
                 assert len(v) == 0
-                raise ValueError("You're trying to use a monitor-based "
-                        "learning rate adjustor but the monitor has no "
-                        "entries because you didn't specify a "
-                        "monitoring dataset.")
+                raise ValueError(
+                    "You're trying to use a monitor-based "
+                    "learning rate adjustor but the monitor has no "
+                    "entries because you didn't specify a "
+                    "monitoring dataset.")
 
-            raise ValueError("For some reason there are no monitor entries"
-                                 "yet the MonitorBasedLRAdjuster has been "
-                                 "called. This should never happen. The Train"
-                                 " object should call the monitor once on "
-                                 "initialization, then call the callbacks. "
-                                 "It seems you are either calling the "
-                                 "callback manually rather than as part of a "
-                                 "training algorithm, or there is a problem "
-                                "with the Train object.")
+            raise ValueError(
+                "For some reason there are no monitor entries"
+                "yet the MonitorBasedLRAdjuster has been "
+                "called. This should never happen. The Train"
+                " object should call the monitor once on "
+                "initialization, then call the callbacks. "
+                "It seems you are either calling the "
+                "callback manually rather than as part of a "
+                "training algorithm, or there is a problem "
+                "with the Train object.")
+
         if len(v) == 1:
-            #only the initial monitoring has happened
-            #no learning has happened, so we can't adjust the learning rate yet
-            #just do nothing
+            # only the initial monitoring has happened
+            # no learning has happened, so we can't adjust learning rate yet
+            # just do nothing
             return
 
         rval = current_learning_rate
@@ -744,8 +754,10 @@ class AnnealedLearningRate(object):
         """
         if not self._initialized:
             self._base = algorithm.learning_rate.get_value()
+            self._initialized = True
         self._count += 1
-        algorithm.learning_rate.set_value(self.current_learning_rate())
+        algorithm.learning_rate.set_value(np.cast[config.floatX](
+            self.current_learning_rate()))
 
     def current_learning_rate(self):
         """
@@ -753,6 +765,7 @@ class AnnealedLearningRate(object):
         annealing schedule.
         """
         return self._base * min(1, self._anneal_start / self._count)
+
 
 class ExponentialDecay(object):
     """
@@ -809,6 +822,7 @@ class ExponentialDecay(object):
         new_lr = np.cast[config.floatX](new_lr)
         algorithm.learning_rate.set_value(new_lr)
 
+
 class LinearDecay(object):
     """
     This is a callback for the SGD algorithm rather than the Train object.
@@ -857,7 +871,7 @@ class LinearDecay(object):
         if self._count >= self.start:
             if self._count < self.saturate:
                 new_lr = self._base_lr - self._step * (self._count
-                        - self.start + 1)
+                                                       - self.start + 1)
             else:
                 new_lr = self._base_lr * self.decay_factor
         else:
@@ -867,21 +881,56 @@ class LinearDecay(object):
         algorithm.learning_rate.set_value(new_lr)
 
 
-def MomentumAdjustor(final_momentum, start, saturate):
+class EpochMonitor(object):
     """
-    Deprecated class used with the deprecated init_momentum argument.
-    Use learning_rule.MomentumAdjustor instead.
+    This is a callback for the SGD algorithm rather than the Train object.
+    It can log one-line progress summaries and/or full monitor updates at
+    regular intervals within epochs, which can be useful for large datasets.
+
+    Note that each monitor update increases the calculation time of the epoch.
 
     Parameters
     ----------
-    final_momentum : WRITEME
-    start : WRITEME
-    saturate : WRITEME
+    model : pylearn2 model instance
+        The model being monitored
+    tick_rate : int (optional)
+        Log one-line updates every `tick_rate` batches
+    monitor_rate : int (optional)
+        Call full monitor updates within epochs every `monitor_rate` batches
+
+    YAML usage
+    ----------
+    model: &model !obj:pylearn2.models.mlp.MLP {
+        ...
+    },
+    algorithm: !obj:pylearn2.training_algorithms.sgd.SGD {
+        update_callbacks: [
+            !obj:pylearn2.training_algorithms.sgd.EpochMonitor {
+                model: *model,
+                tick_rate: 20,
+                monitor_rate: 110 }],
+        ...
+    }
     """
-    warnings.warn("sgd.MomentumAdjustor interface is deprecated and will "
-    "become officially unsupported as of May 9, 2014. Please use "
-    "`learning_rule.MomentumAdjustor` instead.")
-    return LRMomentumAdjustor(final_momentum, start, saturate)
+    def __init__(self, model, tick_rate=None, monitor_rate=None):
+        self.model = model
+        self.tick_rate = tick_rate
+        self.monitor_rate = monitor_rate
+        self.batches = 0
+        self.epoch = 1
+
+    def __call__(self, algorithm):
+        if self.model.monitor.get_epochs_seen() == self.epoch:
+            self.epoch += 1
+            self.batches = 0
+        else:
+            self.batches += 1
+            if self.monitor_rate and self.batches and not (
+                    self.batches % self.monitor_rate):
+                self.model.monitor.__call__()
+            elif self.tick_rate and not self.batches % self.tick_rate:
+                log.info('Epoch {}: {} batches seen'.format(
+                    self.epoch, self.batches))
 
 
 class OneOverEpoch(TrainExtension):
@@ -899,7 +948,7 @@ class OneOverEpoch(TrainExtension):
     min_lr : float, optional
         The minimum value the learning rate can take on
     """
-    def __init__(self, start, half_life = None, min_lr = 1e-6):
+    def __init__(self, start, half_life=None, min_lr=1e-6):
         self.__dict__.update(locals())
         del self.self
         self._initialized = False
@@ -938,11 +987,12 @@ class OneOverEpoch(TrainExtension):
         if self._count < self.start:
             scale = 1
         else:
-            scale = float(self.half_life) / float(self._count - self.start
-                    + self.half_life)
+            scale = float(self.half_life) / float(self._count -
+                                                  self.start + self.half_life)
         lr = self._init_lr * scale
         clipped = max(self.min_lr, lr)
         return clipped
+
 
 class LinearDecayOverEpoch(TrainExtension):
     """
@@ -970,6 +1020,23 @@ class LinearDecayOverEpoch(TrainExtension):
         assert start >= 0
         assert saturate >= start
 
+    def setup(self, model, dataset, algorithm):
+        """
+        Initializes the decay schedule based on epochs_seen.
+
+        Parameters
+        ----------
+        model : pylearn2.models.Model
+            The model to which the training algorithm is applied.
+        dataset : pylearn2.datasets.Dataset
+            The dataset to which the model is applied.
+        algorithm : pylearn2.training_algorithms.TrainingAlgorithm
+            Describes how gradients should be updated.
+        """
+        monitor = Monitor.get_monitor(model)
+        self._count = monitor.get_epochs_seen()
+        self._apply_learning_rate(algorithm)
+
     def on_monitor(self, model, dataset, algorithm):
         """
         Updates the learning rate based on the linear decay schedule.
@@ -980,12 +1047,18 @@ class LinearDecayOverEpoch(TrainExtension):
         dataset : Dataset
         algorithm : WRITEME
         """
+        self._count += 1
+        self._apply_learning_rate(algorithm)
+
+    def _apply_learning_rate(self, algorithm):
+        """
+        Updates the learning rate on algorithm based on the epochs elapsed.
+        """
         if not self._initialized:
             self._init_lr = algorithm.learning_rate.get_value()
             self._step = ((self._init_lr - self._init_lr * self.decay_factor) /
                           (self.saturate - self.start + 1))
             self._initialized = True
-        self._count += 1
         algorithm.learning_rate.set_value(np.cast[config.floatX](
             self.current_lr()))
 
@@ -996,13 +1069,14 @@ class LinearDecayOverEpoch(TrainExtension):
         if self._count >= self.start:
             if self._count < self.saturate:
                 new_lr = self._init_lr - self._step * (self._count
-                        - self.start + 1)
+                                                       - self.start + 1)
             else:
                 new_lr = self._init_lr * self.decay_factor
         else:
             new_lr = self._init_lr
         assert new_lr > 0
         return new_lr
+
 
 class _PolyakWorker(object):
     """
@@ -1026,7 +1100,7 @@ class _PolyakWorker(object):
             self.param_to_mean[param] = mean
             avg_updates[mean] = mean - (mean - param) / t
             avg_updates[t] = t + 1.
-        self.avg = function([], updates = avg_updates)
+        self.avg = function([], updates=avg_updates)
 
     def __call__(self, algorithm):
         """
@@ -1038,6 +1112,7 @@ class _PolyakWorker(object):
         algorithm : WRITEME
         """
         self.avg()
+
 
 class PolyakAveraging(TrainExtension):
     """
@@ -1105,7 +1180,7 @@ class PolyakAveraging(TrainExtension):
         if self._count == self.start:
             self._worker = _PolyakWorker(model)
             algorithm.update_callbacks.append(self._worker)
-            #HACK
+            # HACK
             try:
                 model.add_polyak_channels(self._worker.param_to_mean,
                                           algorithm.monitoring_dataset)

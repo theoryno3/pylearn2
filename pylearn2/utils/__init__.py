@@ -6,18 +6,21 @@
 import logging
 import warnings
 
-from .general import is_iterable
+from .general import is_iterable, contains_nan, contains_inf, isfinite
 import theano
+from theano.compat.six.moves import input, zip as izip
 # Delay import of pylearn2.config.yaml_parse and pylearn2.datasets.control
 # to avoid circular imports
 yaml_parse = None
 control = None
-from itertools import izip
 cuda = None
 
 import numpy as np
+from theano.compat import six
 
 from functools import partial
+
+from pylearn2.utils.exc import reraise_as
 WRAPPER_ASSIGNMENTS = ('__module__', '__name__')
 WRAPPER_CONCATENATIONS = ('__doc__',)
 WRAPPER_UPDATES = ('__dict__',)
@@ -144,7 +147,7 @@ def safe_update(dict_to, dict_from):
     -------
     WRITEME
     """
-    for key, val in dict(dict_from).iteritems():
+    for key, val in six.iteritems(dict_from):
         if key in dict_to:
             raise KeyError(key)
         dict_to[key] = val
@@ -216,6 +219,14 @@ class CallbackOp(theano.gof.Op):
             WRITEME
         """
         return hash(self.callback)
+
+    def __hash__(self):
+        """
+        .. todo::
+
+            WRITEME
+        """
+        return self.hash()
 
 
 def get_dataless_dataset(model):
@@ -360,13 +371,6 @@ def safe_union(a, b):
             c.append(x)
     return c
 
-# This was moved to theano, but I include a link to avoid breaking
-# old imports
-from theano.printing import hex_digest as _hex_digest
-def hex_digest(*args, **kwargs):
-    warnings.warn("hex_digest has been moved into Theano. "
-            "pylearn2.utils.hex_digest will be removed on or after "
-            "2014-08-26")
 
 def function(*args, **kwargs):
     """
@@ -387,10 +391,15 @@ def grad(*args, **kwargs):
 
 
 # Groups of Python types that are often used together in `isinstance`
-py_integer_types = (int, long, np.integer)
+if six.PY3:
+    py_integer_types = (int, np.integer)
+    py_number_types = (int, float, complex, np.number)
+else:
+    py_integer_types = (int, long, np.integer)  # noqa
+    py_number_types = (int, long, float, complex, np.number)  # noqa
+
 py_float_types = (float, np.floating)
 py_complex_types = (complex, np.complex)
-py_number_types = (int, long, float, complex, np.number)
 
 
 def get_choice(choice_to_explanation):
@@ -421,7 +430,7 @@ def get_choice(choice_to_explanation):
         if not first:
             warnings.warn('unrecognized choice')
         first = False
-        choice = raw_input(prompt)
+        choice = input(prompt)
     return choice
 
 
@@ -538,9 +547,9 @@ def update_wrapper(wrapper,
                 try:
                     index = split_stripped.index(replace_before.strip())
                 except ValueError:
-                    raise ValueError('no line equal to "%s" in wrapped '
-                                     'function\'s attribute %s' %
-                                     (replace_before, attr))
+                    reraise_as(ValueError('no line equal to "%s" in wrapped '
+                                          'function\'s attribute %s' %
+                                          (replace_before, attr)))
                 wrapped_val = '\n' + '\n'.join(split[index:])
             else:
                 wrapped_val = getattr(wrapped, attr)

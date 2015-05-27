@@ -38,7 +38,7 @@ class dataset_resolver:
 
         try:
             installed_list_file=open(from_location+"/installed.lst")
-        except IOError, e:
+        except IOError:
             # maybe not a problem, but
             # FIXME: print a warning if exists,
             # but cannot be read (permissions)
@@ -86,7 +86,7 @@ class dataset_resolver:
         paths= ["/etc/pylearn/", os.environ["HOME"]+"/.local/share/pylearn/"]
         try:
             paths+=re.split(":|;",os.environ["PYLEARN2_DATA_PATH"])
-        except:
+        except Exception:
             # PYLEARN2_DATA_PATH may or mayn't be defined
             pass
 

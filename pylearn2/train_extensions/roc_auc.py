@@ -6,7 +6,6 @@ dataset(s), reported via monitor channels.
 __author__ = "Steven Kearnes"
 __copyright__ = "Copyright 2014, Stanford University"
 __license__ = "3-clause BSD"
-__maintainer__ = "Steven Kearnes"
 
 import numpy as np
 try:
@@ -134,8 +133,8 @@ class RocAucChannel(TrainExtension):
         roc_auc = T.cast(roc_auc, config.floatX)
         for dataset_name, dataset in algorithm.monitoring_dataset.items():
             if dataset_name:
-                channel_name = '{}_{}'.format(dataset_name,
-                                              self.channel_name_suffix)
+                channel_name = '{0}_{1}'.format(dataset_name,
+                                                self.channel_name_suffix)
             else:
                 channel_name = self.channel_name_suffix
             model.monitor.add_channel(name=channel_name,

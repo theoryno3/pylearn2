@@ -1,8 +1,10 @@
 """Tools for estimating the partition function of an RBM"""
 import numpy
+from theano.compat.six.moves import xrange
 import theano
 from theano import tensor, config
 from theano.tensor import nnet
+from pylearn2.utils.exc import reraise_as
 from pylearn2.utils.rng import make_np_rng, make_theano_rng
 from pylearn2.utils.mem import improve_memory_error_message
 
@@ -48,10 +50,10 @@ def compute_log_z(rbm, free_energy_fn, max_bits=15):
             dtype=config.floatX
         )
     except MemoryError:
-        raise MemoryError("failed to allocate (%d, %d) matrix of "
-                          "type %s in compute_log_z; try a smaller "
-                          "value of max_bits" %
-                          (block_size, width, str(config.floatX)))
+        reraise_as(MemoryError("failed to allocate (%d, %d) matrix of "
+                               "type %s in compute_log_z; try a smaller "
+                               "value of max_bits" %
+                          (block_size, width, str(config.floatX))))
 
     # fill in the first block_bits, which will remain fixed for all
     # 2**width configs
@@ -61,10 +63,10 @@ def compute_log_z(rbm, free_energy_fn, max_bits=15):
     try:
         logz_data = numpy.array(logz_data_c, order='F', dtype=config.floatX)
     except MemoryError:
-        raise MemoryError("failed to allocate (%d, %d) matrix of "
-                          "type %s in compute_log_z; try a smaller "
-                          "value of max_bits" %
-                          (block_size, width, str(config.floatX)))
+        reraise_as(MemoryError("failed to allocate (%d, %d) matrix of "
+                               "type %s in compute_log_z; try a smaller "
+                               "value of max_bits" %
+                          (block_size, width, str(config.floatX))))
 
     # Allocate storage for (negative) free-energy of all 2**width
     # configurations.

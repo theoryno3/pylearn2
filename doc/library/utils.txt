@@ -37,11 +37,6 @@ Datasets
 .. automodule:: pylearn2.utils.datasets
     :members:
 
-Environment
-===========
-.. automodule:: pylearn2.utils.environ
-    :members:
-
 Exceptions
 ==========
 .. automodule:: pylearn2.utils.exc
@@ -67,11 +62,6 @@ Iteration
 .. automodule:: pylearn2.utils.iteration
     :members:
 
-Key aware
-=========
-.. automodule:: pylearn2.utils.key_aware
-    :members:
-
 Logger
 ======
 .. automodule:: pylearn2.utils.logger
@@ -85,11 +75,6 @@ Memory
 MNIST
 =====
 .. automodule:: pylearn2.utils.mnist_ubyte
-    :members:
-
-One Hot Encoding
-================
-.. automodule:: pylearn2.utils.one_hot
     :members:
 
 Pooling

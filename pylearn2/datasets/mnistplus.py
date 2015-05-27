@@ -7,9 +7,11 @@ import numpy as np
 from theano import config
 from pylearn2.datasets import dense_design_matrix
 from pylearn2.utils.serial import load
+from pylearn2.utils import contains_nan
 
 
 class MNISTPlus(dense_design_matrix.DenseDesignMatrix):
+
     """
     Pylearn2 wrapper for the MNIST-Plus dataset.
 
@@ -33,24 +35,26 @@ class MNISTPlus(dense_design_matrix.DenseDesignMatrix):
         WRITEME
     """
 
-    idx = {'train': slice(0,50000),
-           'valid': slice(50000,60000),
-           'test':  slice(60000,70000)}
+    idx = {'train': slice(0, 50000),
+           'valid': slice(50000, 60000),
+           'test':  slice(60000, 70000)}
 
     def __init__(self, which_set, label_type=None,
-                 azimuth=False, rotation=False, texture=False,
-                 center = False, contrast_normalize=False, seed=132987):
-        assert which_set in ['train','valid','test']
-        assert label_type in [None,'label','azimuth','rotation','texture_id']
+                 center=False, contrast_normalize=False, seed=132987):
+        assert which_set in ['train', 'valid', 'test']
+        assert label_type in [
+            None, 'label', 'azimuth', 'rotation', 'texture_id']
 
         # load data
         fname = '${PYLEARN2_DATA_PATH}/mnistplus/mnistplus'
-        if azimuth:
+        if label_type == 'azimuth':
             fname += '_azi'
-        if rotation:
+        if label_type == 'rotation':
             fname += '_rot'
-        if texture:
+            label_type = 'label'
+        if label_type == 'texture_id':
             fname += '_tex'
+            label_type = 'label'
 
         data = load(fname + '.pkl')
 
@@ -59,31 +63,37 @@ class MNISTPlus(dense_design_matrix.DenseDesignMatrix):
         data_x = data_x[MNISTPlus.idx[which_set]]
 
         if contrast_normalize:
-            meanx = np.mean(data_x, axis=1)[:,None]
-            stdx  = np.std(data_x, axis=1)[:,None]
+            meanx = np.mean(data_x, axis=1)[:, None]
+            stdx = np.std(data_x, axis=1)[:, None]
             data_x = (data_x - meanx) / stdx
 
         if center:
             data_x -= np.mean(data_x, axis=0)
- 
+
         # get labels
         data_y = None
         if label_type is not None:
+            data_y = data[label_type].reshape(-1, 1)
 
-            data_y = data[label_type]
-            
             # convert to float for performing regression
-            if label_type in ['azimuth','rotation']:
+            if label_type == 'azimuth':
                 data_y = np.cast[config.floatX](data_y / 360.)
 
             # retrieve only subset of data
             data_y = data_y[MNISTPlus.idx[which_set]]
 
-        # create view converting for retrieving topological view
-        view_converter = dense_design_matrix.DefaultViewConverter((48, 48))
+        view_converter = dense_design_matrix.DefaultViewConverter((48, 48, 1))
 
         # init the super class
-        super(MNISTPlus, self).__init__(X = data_x, y = data_y, view_converter = view_converter)
+        if data_y is not None:
+            super(MNISTPlus, self).__init__(
+                X=data_x, y=data_y, y_labels=np.max(data_y) + 1,
+                view_converter=view_converter
+            )
+        else:
+            super(MNISTPlus, self).__init__(
+                X=data_x,
+                view_converter=view_converter
+            )
 
-        assert not np.any(np.isnan(self.X))
-
+        assert not contains_nan(self.X)

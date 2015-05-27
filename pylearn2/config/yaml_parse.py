@@ -1,13 +1,18 @@
 """Support code for YAML parsing of experiment descriptions."""
 import yaml
 from pylearn2.utils import serial
+from pylearn2.utils.exc import reraise_as
 from pylearn2.utils.string_utils import preprocess
 from pylearn2.utils.call_check import checked_call
 from pylearn2.utils.string_utils import match
 from collections import namedtuple
 import logging
 import warnings
+import re
 
+from theano.compat import six
+
+SCIENTIFIC_NOTATION_REGEXP = r'^[\-\+]?(\d+\.?\d*|\d*\.?\d+)?[eE][\-\+]?\d+$'
 
 is_initialized = False
 additional_environ = None
@@ -62,118 +67,6 @@ class Proxy(BaseProxy):
         return hash(id(self))
 
 
-class ObjectProxy(Proxy):
-    """
-    API compatibility wrapper for deprecated `ObjectProxy` class.
-
-    Parameters
-    ----------
-    cls : callable
-       See `callable` in `Proxy` docstring.
-    kwds : dict
-       See `keywords` in `Proxy` docstring.
-    yaml_src : str
-       See `yaml_src` in `Proxy` docstring.
-
-    .. warning::
-
-        Deprecated, to be removed as of January 1, 2015.
-    """
-    def __init__(self, cls, kwds, yaml_src):
-        self._warn()
-        super(ObjectProxy, self).__init__(callable=cls, positionals=(),
-                                          keywords=kwds, yaml_src=yaml_src)
-
-    def _warn(self, s):
-        """
-        Issue a templated warning message about deprecation of this interface.
-
-        Parameters
-        ----------
-        s : str
-            Prefix string for the warning message.
-        """
-        warnings.warn("%s is deprecated. Switch to `Proxy`. "
-                      "`ObjectProxy` will be removed on or after "
-                      "January 10, 2015." % s, stacklevel=2)
-
-    def __getitem__(self, key):
-        """
-        .. warning::
-
-            Deprecated, to be removed as of January 1, 2015.
-        """
-        self._warn("ObjectProxy.__getitem__")
-        return self.kwds[key]
-
-    def __setitem__(self, key, value):
-        """
-        .. warning::
-
-            Deprecated, to be removed as of January 1, 2015.
-        """
-        self._warn("ObjectProxy.__setitem__")
-        self.kwds[key] = value
-
-    def __iter__(self):
-        """
-
-        .. warning::
-
-            Deprecated, to be removed as of January 1, 2015.
-        """
-        self._warn("ObjectProxy.__iter__")
-        return self.kwds.__iter__()
-
-    def keys(self):
-        """
-
-        .. warning::
-
-            Deprecated, to be removed as of January 1, 2015.
-        """
-        self._warn("ObjectProxy.keys")
-        return list(self.kwds)
-
-    @property
-    def kwds(self):
-        """
-        .. warning::
-
-            Deprecated, to be removed as of January 1, 2015.
-        """
-        self._warn("ObjectProxy.kwds")
-        return self.keywords
-
-    @property
-    def cls(self):
-        """
-        .. warning::
-
-            Deprecated, to be removed as of January 1, 2015.
-        """
-        self._warn("ObjectProxy.cls")
-        return self.callable
-
-    def instantiate(self):
-        """
-        .. warning::
-
-            Deprecated, to be removed as of January 1, 2015.
-
-        Instantiate this object with the supplied parameters in `self.kwds`,
-        or if already instantiated, return the cached instance.
-        """
-        self._warn("ObjectProxy.instantiate")
-        if self.instance is None:
-            self.instance = checked_call(self.cls, self.kwds)
-        try:
-            self.instance.yaml_src = self.yaml_src
-        except AttributeError:
-            pass
-        return self.instance
-
-
 def do_not_recurse(value):
     """
     Function symbol used for wrapping an unpickled object (which should
@@ -225,29 +118,14 @@ def _instantiate_proxy_tuple(proxy, bindings=None):
                 raise NotImplementedError('positional arguments not yet '
                                           'supported in proxy instantiation')
             kwargs = dict((k, _instantiate(v, bindings))
-                          for k, v in proxy.keywords.iteritems())
+                          for k, v in six.iteritems(proxy.keywords))
             obj = checked_call(proxy.callable, kwargs)
         try:
             obj.yaml_src = proxy.yaml_src
         except AttributeError:  # Some classes won't allow this.
             pass
-        return obj
-
-
-def instantiate_all(graph):
-    """
-    .. warning::
-
-        Deprecated, to be removed as of January 1, 2015.
-
-    API compatibility wrapper for deprecated `instantiate_all`.
-
-    Parameters
-    ----------
-    graph : object
-        A `Proxy` object or list/dict/literal. Strings are run through
-        `preprocess`.
-    """
+        bindings[proxy] = obj
+        return bindings[proxy]
 
 
 def _instantiate(proxy, bindings=None):
@@ -280,12 +158,12 @@ def _instantiate(proxy, bindings=None):
         # Recurse on the keys too, for backward compatibility.
         # Is the key instantiation feature ever actually used, by anyone?
         return dict((_instantiate(k, bindings), _instantiate(v, bindings))
-                    for k, v in proxy.iteritems())
+                    for k, v in six.iteritems(proxy))
     elif isinstance(proxy, list):
         return [_instantiate(v, bindings) for v in proxy]
     # In the future it might be good to consider a dict argument that provides
     # a type->callable mapping for arbitrary transformations like this.
-    elif isinstance(proxy, basestring):
+    elif isinstance(proxy, six.string_types):
         return preprocess(proxy)
     else:
         return proxy
@@ -325,7 +203,7 @@ def load(stream, environ=None, instantiate=True, **kwargs):
         initialize()
     additional_environ = environ
 
-    if isinstance(stream, basestring):
+    if isinstance(stream, six.string_types):
         string = stream
     else:
         string = stream.read()
@@ -387,7 +265,7 @@ def try_to_import(tag_suffix):
     modulename = '.'.join(components[:-1])
     try:
         exec('import %s' % modulename)
-    except ImportError, e:
+    except ImportError as e:
         # We know it's an ImportError, but is it an ImportError related to
         # this path,
         # or did the module we're importing have an unrelated ImportError?
@@ -401,8 +279,8 @@ def try_to_import(tag_suffix):
             # The yaml file is probably to blame.
             # Report the problem with the full module path from the YAML
             # file
-            raise ImportError("Could not import %s; ImportError was %s" %
-                              (modulename, str_e))
+            reraise_as(ImportError("Could not import %s; ImportError was %s" %
+                                   (modulename, str_e)))
         else:
 
             pcomponents = components[:-1]
@@ -412,17 +290,17 @@ def try_to_import(tag_suffix):
                 modulename = '.'.join(pcomponents[:j])
                 try:
                     exec('import %s' % modulename)
-                except:
+                except Exception:
                     base_msg = 'Could not import %s' % modulename
                     if j > 1:
                         modulename = '.'.join(pcomponents[:j - 1])
                         base_msg += ' but could import %s' % modulename
-                    raise ImportError(base_msg + '. Original exception: '
-                                      + str(e))
+                    reraise_as(ImportError(base_msg + '. Original exception: '
+                                           + str(e)))
                 j += 1
     try:
         obj = eval(tag_suffix)
-    except AttributeError, e:
+    except AttributeError as e:
         try:
             # Try to figure out what the wrong field name was
             # If we fail to do it, just fall back to giving the usual
@@ -436,11 +314,11 @@ def try_to_import(tag_suffix):
                    'Did you mean ' + match(field, candidates) + '? ' +
                    'Original error was ' + str(e))
 
-        except:
+        except Exception:
             warnings.warn("Attempt to decipher AttributeError failed")
-            raise AttributeError('Could not evaluate %s. ' % tag_suffix +
-                                 'Original error was ' + str(e))
-        raise AttributeError(msg)
+            reraise_as(AttributeError('Could not evaluate %s. ' % tag_suffix +
+                                      'Original error was ' + str(e)))
+        reraise_as(AttributeError(msg))
     return obj
 
 
@@ -458,6 +336,9 @@ def initialize():
 
     yaml.add_constructor('!import', constructor_import)
     yaml.add_constructor("!float", constructor_float)
+
+    pattern = re.compile(SCIENTIFIC_NOTATION_REGEXP)
+    yaml.add_implicit_resolver('!float', pattern)
 
     is_initialized = True
 
@@ -480,7 +361,7 @@ def multi_constructor_obj(loader, tag_suffix, node):
     assert hasattr(mapping, 'values')
 
     for key in mapping.keys():
-        if not isinstance(key, basestring):
+        if not isinstance(key, six.string_types):
             message = "Received non string object (%s) as " \
                       "key in mapping." % str(key)
             raise TypeError(message)
@@ -555,12 +436,12 @@ def construct_mapping(node, deep=False):
         key = constructor.construct_object(key_node, deep=False)
         try:
             hash(key)
-        except TypeError, exc:
+        except TypeError as exc:
             const = yaml.constructor
-            raise const.ConstructorError("while constructing a mapping",
-                                         node.start_mark,
-                                         "found unacceptable key (%s)" % exc,
-                                         key_node.start_mark)
+            reraise_as(const.ConstructorError("while constructing a mapping",
+                                              node.start_mark,
+                                              "found unacceptable key (%s)" %
+                                              (exc, key_node.start_mark)))
         if key in mapping:
             const = yaml.constructor
             raise const.ConstructorError("while constructing a mapping",

@@ -1,10 +1,14 @@
 """
 Functionality for display and saving images of collections of images patches.
 """
+from __future__ import division
+
 import numpy as np
+from theano.compat.six.moves import xrange
 from pylearn2.datasets.dense_design_matrix import DefaultViewConverter
 from pylearn2.utils.image import Image, ensure_Image
 from pylearn2.utils.image import show
+from pylearn2.utils import isfinite
 from pylearn2.utils import py_integer_types
 import warnings
 
@@ -73,7 +77,7 @@ def make_viewer(mat, grid_shape=None, patch_shape=None,
     else:
         if patch_shape is None:
             assert mat.shape[1] % num_channels == 0
-            patch_shape = PatchViewer.pick_shape(mat.shape[1] / num_channels,
+            patch_shape = PatchViewer.pick_shape(mat.shape[1] // num_channels,
                                                  exact = True)
             assert mat.shape[1] == (patch_shape[0] *
                                     patch_shape[1] *
@@ -250,9 +254,9 @@ class PatchViewer(object):
                 raise ValueError("Given patch of width %d but only patches up"
                                  " to width %d fit" \
                                  % (patch.shape[1], self.patch_shape[1]))
-            rs_pad = (self.patch_shape[0] - patch.shape[0]) / 2
+            rs_pad = (self.patch_shape[0] - patch.shape[0]) // 2
             re_pad = self.patch_shape[0] - rs_pad - patch.shape[0]
-            cs_pad = (self.patch_shape[1] - patch.shape[1]) / 2
+            cs_pad = (self.patch_shape[1] - patch.shape[1]) // 2
             ce_pad = self.patch_shape[1] - cs_pad - patch.shape[1]
         else:
             if patch.shape[0:2] != self.patch_shape:
@@ -265,7 +269,7 @@ class PatchViewer(object):
 
         temp = patch.copy()
 
-        assert (not np.any(np.isnan(temp))) and (not np.any(np.isinf(temp)))
+        assert isfinite(temp)
 
         if rescale:
             scale = np.abs(temp).max()
@@ -403,10 +407,10 @@ class PatchViewer(object):
             best_c = -1
             best_ratio = 0
 
-            for r in xrange(1,int(np.sqrt(n))+1):
+            for r in xrange(1, int(np.sqrt(n)) + 1):
                 if n % r != 0:
                     continue
-                c = n / r
+                c = n // r
 
                 ratio = min( float(r)/float(c), float(c)/float(r) )
 

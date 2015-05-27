@@ -1,3 +1,5 @@
+from __future__ import print_function
+
 import numpy
 import time
 import warnings
@@ -37,51 +39,63 @@ def compute_logz(rbm_params):
     return rbm_tools.compute_log_z(model, free_energy_fn)
 
 
-def ais_nodata(fname, do_exact=True):
+def ais_nodata(fname, do_exact=True, betas=None):
 
     rbm_params = load_rbm_params(fname)
 
     # ais estimate using tempered models as intermediate distributions
     t1 = time.time()
     (logz, log_var_dz), aisobj = \
-        rbm_tools.rbm_ais(rbm_params, n_runs=100, seed=123)
-    print 'AIS logZ         : %f' % logz
-    print '    log_variance : %f' % log_var_dz
-    print 'Elapsed time: ', time.time() - t1
+        rbm_tools.rbm_ais(rbm_params, n_runs=100, seed=123, betas=betas)
+    print('AIS logZ         : %f' % logz)
+    print('    log_variance : %f' % log_var_dz)
+    print('Elapsed time: ', time.time() - t1)
 
     if do_exact:
         exact_logz = compute_logz(rbm_params)
-        print 'Exact logZ = %f' % exact_logz
+        print('Exact logZ = %f' % exact_logz)
         # accept less than 1% error
         assert abs(exact_logz - logz) < 0.01*exact_logz
 
 
-def ais_data(fname, do_exact=True):
+def ais_data(fname, do_exact=True, betas=None):
 
     rbm_params = load_rbm_params(fname)
 
     # load data to set visible biases to ML solution
     from pylearn2.datasets.mnist import MNIST
-    dataset = MNIST(which_set='train', one_hot=True)
+    dataset = MNIST(which_set='train')
     data = numpy.asarray(dataset.X, dtype=config.floatX)
 
     # run ais using B=0 model with ML visible biases
     t1 = time.time()
     (logz, log_var_dz), aisobj = \
-        rbm_tools.rbm_ais(rbm_params, n_runs=100, seed=123, data=data)
-    print 'AIS logZ         : %f' % logz
-    print '    log_variance : %f' % log_var_dz
-    print 'Elapsed time: ', time.time() - t1
+        rbm_tools.rbm_ais(rbm_params, n_runs=100, seed=123, data=data,
+                          betas=betas)
+    print('AIS logZ         : %f' % logz)
+    print('    log_variance : %f' % log_var_dz)
+    print('Elapsed time: ', time.time() - t1)
 
     if do_exact:
         exact_logz = compute_logz(rbm_params)
-        print 'Exact logZ = %f' % exact_logz
+        print('Exact logZ = %f' % exact_logz)
         numpy.testing.assert_almost_equal(exact_logz, logz, decimal=0)
 
 
 def test_ais():
+    if config.mode == "DEBUG_MODE":
+        betas = numpy.hstack((numpy.asarray(numpy.linspace(0, 0.5, 10),
+                                            dtype=config.floatX),
+                              numpy.asarray(numpy.linspace(0.5, 0.9, 10),
+                                            dtype=config.floatX),
+                              numpy.asarray(numpy.linspace(0.9, 1.0, 10),
+                                            dtype=config.floatX)))
+        do_exact = False
+    else:
+        betas = None
+        do_exact = True
 
-    ais_data('mnistvh.mat', do_exact=True)
+    ais_data('mnistvh.mat', do_exact=do_exact, betas=betas)
 
     # Estimate can be off when using the wrong base-rate model.
-    ais_nodata('mnistvh.mat', do_exact=True)
+    ais_nodata('mnistvh.mat', do_exact=do_exact, betas=betas)

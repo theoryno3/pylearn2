@@ -10,6 +10,7 @@ __email__ = "pylearn-dev@googlegroups"
 
 import numpy as np
 import theano.tensor as T
+import warnings
 
 from pylearn2.blocks import Block
 from pylearn2.utils import as_floatX, constantX
@@ -240,6 +241,53 @@ def is_binary(x):
         WRITEME
     """
     return np.all( (x == 0) + (x == 1))
+
+
+def log_sum_exp(A=None, axis=None, log_A=None):
+    """
+    A numerically stable expression for
+    `T.log(T.exp(A).sum(axis=axis))`
+
+    Parameters
+    ----------
+    A : theano.gof.Variable
+        A tensor we want to compute the log sum exp of
+    axis : int, optional
+        Axis along which to sum
+    log_A : deprecated
+        `A` used to be named `log_A`. We are removing the `log_A`
+        interface because there is no need for the input to be
+        the output of theano.tensor.log. The only change is the
+        renaming, i.e. the value of log_sum_exp(log_A=foo) has
+        not changed, and log_sum_exp(A=foo) is equivalent to
+        log_sum_exp(log_A=foo).
+
+    Returns
+    -------
+    log_sum_exp : theano.gof.Variable
+        The log sum exp of `A`
+    """
+
+    if log_A is not None:
+        assert A is None
+        warnings.warn("log_A is deprecated, and will be removed on or"
+                      "after 2015-08-09. Switch to A")
+        A = log_A
+    del log_A
+
+    A_max = T.max(A, axis=axis, keepdims=True)
+    B = (
+        T.log(T.sum(T.exp(A - A_max), axis=axis, keepdims=True)) +
+        A_max
+    )
+
+    if axis is None:
+        return B.dimshuffle(())
+    else:
+        if type(axis) is int:
+            axis = [axis]
+        return B.dimshuffle([i for i in range(B.ndim) if
+                             i % B.ndim not in axis])
 
 
 class Identity(Block):

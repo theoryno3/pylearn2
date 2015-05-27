@@ -12,7 +12,14 @@ __maintainer__ = "LISA Lab"
 __email__ = "pylearn-dev@googlegroups"
 
 
-import copy, logging, time, warnings, os, numpy, scipy
+import copy
+import logging
+import time
+import warnings
+import os
+import numpy
+from theano.compat.six.moves import xrange
+import scipy
 try:
     from scipy import linalg
 except ImportError:
@@ -26,15 +33,19 @@ from pylearn2.space import Conv2DSpace, VectorSpace
 from pylearn2.expr.preprocessing import global_contrast_normalize
 from pylearn2.utils.insert_along_axis import insert_columns
 from pylearn2.utils import sharedX
+from pylearn2.utils.exc import reraise_as
 from pylearn2.utils.rng import make_np_rng
+from pylearn2.utils import contains_nan
 
 
 log = logging.getLogger(__name__)
+
 
 convert_axes = Conv2DSpace.convert_numpy
 
 
 class Preprocessor(object):
+
     """
         Abstract class.
 
@@ -111,6 +122,7 @@ class Preprocessor(object):
 
 
 class ExamplewisePreprocessor(Preprocessor):
+
     """
     Abstract class.
 
@@ -131,6 +143,7 @@ class ExamplewisePreprocessor(Preprocessor):
 
 
 class BlockPreprocessor(ExamplewisePreprocessor):
+
     """
     An ExamplewisePreprocessor implemented by a Block.
 
@@ -153,6 +166,7 @@ class BlockPreprocessor(ExamplewisePreprocessor):
 
 
 class Pipeline(Preprocessor):
+
     """
     A Preprocessor that sequentially applies a list
     of other Preprocessors.
@@ -176,6 +190,7 @@ class Pipeline(Preprocessor):
 
 
 class ExtractGridPatches(Preprocessor):
+
     """
     Converts a dataset of images into a dataset of patches extracted along a
     regular grid from each image.  The order of the images is
@@ -265,6 +280,7 @@ class ExtractGridPatches(Preprocessor):
 
 
 class ReassembleGridPatches(Preprocessor):
+
     """
     Converts a dataset of patches into a dataset of full examples.
 
@@ -308,7 +324,7 @@ class ReassembleGridPatches(Preprocessor):
                 raise Exception('Trying to re-assemble ' + str(num_patches) +
                                 ' patches of shape ' + str(self.patch_shape) +
                                 ' into images of shape ' + str(self.orig_shape)
-                               )
+                                )
             num_examples /= patches_this_dim
 
         # batch size
@@ -341,9 +357,9 @@ class ReassembleGridPatches(Preprocessor):
             try:
                 patch = patches[i, :]
             except IndexError:
-                raise IndexError('Gave index of ' + str(i) +
-                                 ', : into thing of shape ' +
-                                 str(patches.shape))
+                reraise_as(IndexError('Gave index of ' + str(i) +
+                                      ', : into thing of shape ' +
+                                      str(patches.shape)))
             reassembled[args] = patch
             i += 1
             j = 0
@@ -366,6 +382,7 @@ class ReassembleGridPatches(Preprocessor):
 
 
 class ExtractPatches(Preprocessor):
+
     """
     Converts an image dataset into a dataset of patches
     extracted at random from the original dataset.
@@ -380,8 +397,9 @@ class ExtractPatches(Preprocessor):
     def __init__(self, patch_shape, num_patches, rng=None):
         self.patch_shape = patch_shape
         self.num_patches = num_patches
-
-        self.start_rng = make_np_rng(copy.copy(rng), [1,2,3], which_method="randint")
+        self.start_rng = make_np_rng(copy.copy(rng),
+                                     [1, 2, 3],
+                                     which_method="randint")
 
     def apply(self, dataset, can_fit=False):
         """
@@ -426,6 +444,7 @@ class ExtractPatches(Preprocessor):
 
 
 class ExamplewiseUnitNormBlock(Block):
+
     """
     A block that takes n-tensors, with training examples indexed along
     the first axis, and normalizes each example to lie on the unit
@@ -483,6 +502,7 @@ class ExamplewiseUnitNormBlock(Block):
 
 
 class MakeUnitNorm(ExamplewisePreprocessor):
+
     """
     .. todo::
 
@@ -510,6 +530,7 @@ class MakeUnitNorm(ExamplewisePreprocessor):
 
 
 class ExamplewiseAddScaleTransform(Block):
+
     """
     A block that encodes an per-feature addition/scaling transform.
     The addition/scaling can be done in either order.
@@ -531,8 +552,8 @@ class ExamplewiseAddScaleTransform(Block):
 
     def __init__(self, add=None, multiply=None, multiply_first=False,
                  input_space=None):
-        self._add = numpy.asarray(add)
-        self._multiply = numpy.asarray(multiply)
+        self.add = numpy.asarray(add)
+        self.multiply = numpy.asarray(multiply)
         # TODO: put the constant somewhere sensible.
         if multiply is not None:
             self._has_zeros = numpy.any(abs(multiply) < 1e-14)
@@ -547,8 +568,8 @@ class ExamplewiseAddScaleTransform(Block):
 
             WRITEME
         """
-        if self._multiply is not None:
-            batch *= self._multiply
+        if self.multiply is not None:
+            batch *= self.multiply
         return batch
 
     def _add(self, batch):
@@ -557,8 +578,8 @@ class ExamplewiseAddScaleTransform(Block):
 
             WRITEME
         """
-        if self._add is not None:
-            batch += self._add
+        if self.add is not None:
+            batch += self.add
         return batch
 
     def __call__(self, batch):
@@ -621,6 +642,7 @@ class ExamplewiseAddScaleTransform(Block):
 
 
 class RemoveMean(ExamplewisePreprocessor):
+
     """
     Subtracts the mean along a given axis, or from every element
     if `axis=None`.
@@ -665,6 +687,7 @@ class RemoveMean(ExamplewisePreprocessor):
 
 
 class Standardize(ExamplewisePreprocessor):
+
     """
     Subtracts the mean and divides by the standard deviation.
 
@@ -724,11 +747,13 @@ class Standardize(ExamplewisePreprocessor):
 
 
 class ColumnSubsetBlock(Block):
+
     """
     .. todo::
 
         WRITEME
     """
+
     def __init__(self, columns, total):
         self._columns = columns
         self._total = total
@@ -769,6 +794,7 @@ class ColumnSubsetBlock(Block):
 
 
 class ZeroColumnInsertBlock(Block):
+
     def __init__(self, columns, total):
         """
         .. todo::
@@ -814,6 +840,7 @@ class ZeroColumnInsertBlock(Block):
 
 
 class RemoveZeroColumns(ExamplewisePreprocessor):
+
     """
     .. todo::
 
@@ -849,6 +876,7 @@ class RemoveZeroColumns(ExamplewisePreprocessor):
 
 
 class RemapInterval(ExamplewisePreprocessor):
+
     """
     .. todo::
 
@@ -875,6 +903,7 @@ class RemapInterval(ExamplewisePreprocessor):
 
 
 class PCA_ViewConverter(object):
+
     """
     .. todo::
 
@@ -887,6 +916,7 @@ class PCA_ViewConverter(object):
     to_weights : WRITEME
     orig_view_converter : WRITEME
     """
+
     def __init__(self, to_pca, to_input, to_weights, orig_view_converter):
         self.to_pca = to_pca
         self.to_input = to_input
@@ -950,6 +980,7 @@ class PCA_ViewConverter(object):
 
 
 class PCA(object):
+
     """
     .. todo::
 
@@ -958,10 +989,14 @@ class PCA(object):
     Parameters
     ----------
     num_components : WRITEME
+    whiten : bool, optional
+        If False, whitening (or sphering) will not be performed (default).
+        If True, the preprocessed data will have zero mean and unit covariance.
     """
 
-    def __init__(self, num_components):
+    def __init__(self, num_components, whiten=False):
         self._num_components = num_components
+        self._whiten = whiten
         self._pca = None
         # TODO: Is storing these really necessary? This computation
         # can't really be merged since we're basically creating the
@@ -979,8 +1014,9 @@ class PCA(object):
             if not can_fit:
                 raise ValueError("can_fit is False, but PCA preprocessor "
                                  "object has no fitted model stored")
-            from pylearn2 import pca
-            self._pca = pca.CovEigPCA(self._num_components)
+            from pylearn2.models import pca
+            self._pca = pca.CovEigPCA(num_components=self._num_components,
+                                      whiten=self._whiten)
             self._pca.train(dataset.get_design_matrix())
             self._transform_func = function([self._input],
                                             self._pca(self._input))
@@ -998,7 +1034,10 @@ class PCA(object):
         proc_data = dataset.get_design_matrix()
         orig_var = orig_data.var(axis=0)
         proc_var = proc_data.var(axis=0)
-        assert proc_var[0] > orig_var.max()
+        # assert below fails when 'whiten' is True or sometimes on test
+        # or validation set when the preprocessor was fit on train set
+        if not self._whiten and can_fit:
+            assert proc_var[0] > orig_var.max()
 
         log.info('original variance: {0}'.format(orig_var.sum()))
         log.info('processed variance: {0}'.format(proc_var.sum()))
@@ -1012,6 +1051,7 @@ class PCA(object):
 
 
 class Downsample(object):
+
     """
     Downsamples the topological view
 
@@ -1062,6 +1102,7 @@ class Downsample(object):
 
 
 class GlobalContrastNormalization(Preprocessor):
+
     """
     .. todo::
 
@@ -1117,16 +1158,18 @@ class GlobalContrastNormalization(Preprocessor):
                 stop = i + self._batch_size
                 log.info("GCN processing data from %d to %d" % (i, stop))
                 X = data[i:stop]
-                X = global_contrast_normalize(X,
-                                              scale=self._scale,
-                                              subtract_mean=self._subtract_mean,
-                                              use_std=self._use_std,
-                                              sqrt_bias=self._sqrt_bias,
-                                              min_divisor=self._min_divisor)
+                X = global_contrast_normalize(
+                    X,
+                    scale=self._scale,
+                    subtract_mean=self._subtract_mean,
+                    use_std=self._use_std,
+                    sqrt_bias=self._sqrt_bias,
+                    min_divisor=self._min_divisor)
                 dataset.set_design_matrix(X, start=i)
 
 
 class ZCA(Preprocessor):
+
     """
     Performs ZCA whitening.
 
@@ -1137,8 +1180,14 @@ class ZCA(Preprocessor):
 
     Parameters
     ----------
-    n_components : WRITEME
-    n_drop_components : WRITEME
+    n_components : integer, optional
+        Keeps the n_components biggest eigenvalues and corresponding
+        eigenvectors of covariance matrix.
+    n_drop_components : integer, optional
+        Drops the n_drop_components smallest eigenvalues and corresponding
+        eigenvectors of covariance matrix. Will only drop components
+        when n_components is not set i.e. n_components has preference over
+        n_drop_components.
     filter_bias : float, optional
         TODO: verify that default of 0.1 is what was used in the
         Coates and Ng paper, add reference
@@ -1195,8 +1244,8 @@ class ZCA(Preprocessor):
         if not hasattr(ZCA._gpu_matrix_dot, 'theano_func'):
             ma, mb = theano.tensor.matrices('A', 'B')
             mc = theano.tensor.dot(ma, mb)
-            ZCA._gpu_matrix_dot.theano_func = theano.function([ma, mb], mc,
-                    allow_input_downcast=True)
+            ZCA._gpu_matrix_dot.theano_func = \
+                theano.function([ma, mb], mc, allow_input_downcast=True)
 
         theano_func = ZCA._gpu_matrix_dot.theano_func
 
@@ -1206,7 +1255,7 @@ class ZCA(Preprocessor):
             else:
                 matrix_c[...] = theano_func(matrix_a, matrix_b)
                 return matrix_c
-        except MemoryError, me:
+        except MemoryError:
             warnings.warn('Matrix multiplication too big to fit on GPU. '
                           'Re-doing with CPU. Consider using '
                           'THEANO_FLAGS="device=cpu" for your next '
@@ -1336,6 +1385,9 @@ class ZCA(Preprocessor):
 
         self.__dict__.update(state)
 
+        if not hasattr(self, "inv_P_"):
+            self.inv_P_ = None
+
     def fit(self, X):
         """
         Fits this `ZCA` instance to a design matrix `X`.
@@ -1353,7 +1405,7 @@ class ZCA(Preprocessor):
         """
 
         assert X.dtype in ['float32', 'float64']
-        assert not numpy.any(numpy.isnan(X))
+        assert not contains_nan(X)
         assert len(X.shape) == 2
         n_samples = X.shape[0]
         if self.copy:
@@ -1370,18 +1422,24 @@ class ZCA(Preprocessor):
 
         covariance = ZCA._gpu_matrix_dot(X.T, X) / X.shape[0] + bias
         t2 = time.time()
-        log.info("cov estimate took {0} seconds".format(t2-t1))
+        log.info("cov estimate took {0} seconds".format(t2 - t1))
 
         t1 = time.time()
         eigs, eigv = linalg.eigh(covariance)
         t2 = time.time()
+
         log.info("eigh() took {0} seconds".format(t2 - t1))
-        assert not numpy.any(numpy.isnan(eigs))
-        assert not numpy.any(numpy.isnan(eigv))
+        assert not contains_nan(eigs)
+        assert not contains_nan(eigv)
         assert eigs.min() > 0
+
+        if self.n_components and self.n_drop_components:
+            raise ValueError('Either n_components or n_drop_components'
+                             'should be specified')
+
         if self.n_components:
-            eigs = eigs[:self.n_components]
-            eigv = eigv[:, :self.n_components]
+            eigs = eigs[-self.n_components:]
+            eigv = eigv[:, -self.n_components:]
 
         if self.n_drop_components:
             eigs = eigs[self.n_drop_components:]
@@ -1391,13 +1449,13 @@ class ZCA(Preprocessor):
 
         sqrt_eigs = numpy.sqrt(eigs)
         try:
-            self.P_ = ZCA._gpu_mdmt(eigv, 1.0/sqrt_eigs)
+            self.P_ = ZCA._gpu_mdmt(eigv, 1.0 / sqrt_eigs)
         except MemoryError:
             warnings.warn()
             self.P_ = numpy.dot(eigv * (1.0 / sqrt_eigs), eigv.T)
 
         t2 = time.time()
-        assert not numpy.any(numpy.isnan(self.P_))
+        assert not contains_nan(self.P_)
         self.has_fit_ = True
 
         if self.store_inverse:
@@ -1439,10 +1497,22 @@ class ZCA(Preprocessor):
             WRITEME
         """
         assert X.ndim == 2
+
+        if self.inv_P_ is None:
+            warnings.warn("inv_P_ was None. Computing "
+                          "inverse of P_ now. This will take "
+                          "some time. For efficiency, it is recommended that "
+                          "in the future you compute the inverse in ZCA.fit() "
+                          "instead, by passing it store_inverse=True.")
+            log.info('inverting...')
+            self.inv_P_ = numpy.linalg.inv(self.P_)
+            log.info('...done inverting')
+
         return self._gpu_matrix_dot(X, self.inv_P_) + self.mean_
 
 
 class LeCunLCN(ExamplewisePreprocessor):
+
     """
     Yann LeCun local contrast normalization
 
@@ -1480,7 +1550,7 @@ class LeCunLCN(ExamplewisePreprocessor):
             elif isinstance(channels, int):
                 self._channels = [channels]
             else:
-                raise ValueError("channesl should be either a list or int")
+                raise ValueError("channels should be either a list or int")
 
     def transform(self, x):
         """
@@ -1550,6 +1620,7 @@ class LeCunLCN(ExamplewisePreprocessor):
 
 
 class RGB_YUV(ExamplewisePreprocessor):
+
     """
     Converts image color channels from rgb to yuv and vice versa
 
@@ -1658,6 +1729,7 @@ class RGB_YUV(ExamplewisePreprocessor):
 
 
 class CentralWindow(Preprocessor):
+
     """
     Preprocesses an image dataset to contain only the central window.
 
@@ -1683,8 +1755,9 @@ class CentralWindow(Preprocessor):
         try:
             axes = dataset.view_converter.axes
         except AttributeError:
-            raise NotImplementedError("I don't know how to tell what the axes "
-                                      "of this kind of dataset are.")
+            reraise_as(NotImplementedError("I don't know how to tell what the "
+                                           "axes of this kind of dataset "
+                                           "are."))
 
         needs_transpose = not axes[1:3] == (0, 1)
 
@@ -1741,7 +1814,7 @@ def lecun_lcn(input, img_shape, kernel_shape, threshold=1e-4):
                          batch_size=len(input),
                          input_space=input_space,
                          border_mode='full')
-    sum_sqr_XX = transformer.lmul(X**2)
+    sum_sqr_XX = transformer.lmul(X ** 2)
 
     denom = tensor.sqrt(sum_sqr_XX[:, mid:-mid, mid:-mid, :])
     per_img_mean = denom.mean(axis=[1, 2])
@@ -1769,8 +1842,8 @@ def gaussian_filter(kernel_shape):
                     dtype=theano.config.floatX)
 
     def gauss(x, y, sigma=2.0):
-        Z = 2 * numpy.pi * sigma**2
-        return 1. / Z * numpy.exp(-(x**2 + y**2) / (2. * sigma**2))
+        Z = 2 * numpy.pi * sigma ** 2
+        return 1. / Z * numpy.exp(-(x ** 2 + y ** 2) / (2. * sigma ** 2))
 
     mid = numpy.floor(kernel_shape / 2.)
     for i in xrange(0, kernel_shape):
@@ -1781,6 +1854,7 @@ def gaussian_filter(kernel_shape):
 
 
 class ShuffleAndSplit(Preprocessor):
+
     """
     .. todo::
 

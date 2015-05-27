@@ -32,6 +32,7 @@ log = logging.getLogger(__name__)
 
 
 class LocalDatasetCache:
+
     """
     A local cache for remote files for faster access and reducing
     network stress.
@@ -115,7 +116,14 @@ class LocalDatasetCache:
 
         # Create the folder structure to receive the remote file
         local_folder = os.path.split(local_name)[0]
-        self.safe_mkdir(local_folder)
+        try:
+            self.safe_mkdir(local_folder)
+        except Exception as e:
+            log.warning(
+                (common_msg +
+                 "While creating the directory %s, we got an error."
+                 " We won't cache to the local disk.") % local_folder)
+            return filename
 
         # Acquire writelock on the local file to prevent the possibility
         # of any other process modifying it while we cache it if needed.
@@ -323,7 +331,7 @@ class LocalDatasetCache:
             base = len(force_perm_path) - len(intermediaryFolders)
 
         for i in range(1, len(intermediaryFolders)):
-            folderToCreate = os.path.sep.join(intermediaryFolders[:i+1])
+            folderToCreate = os.path.sep.join(intermediaryFolders[:i + 1])
 
             if os.path.exists(folderToCreate):
                 continue
